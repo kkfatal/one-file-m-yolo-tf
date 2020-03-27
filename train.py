@@ -10,13 +10,13 @@ from PIL import Image
 #import cv2 # just for displaying
 
 
-lr = 0.001 #0.0001 # learning rate
+lr = 0.01 #0.0001 # learning rate
 restore_at_begining = 1 # restore ANN model at begining of training
 gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
 clnum = 3*(5 + 2)
 modelname = "checkpoint/model_bup.ckpt"
-pw = 90 # box max size
-ph = 90
+pw = 500 # box max size
+ph = 500
 dbg = 0 # display DEBUG info!
 
 if 0:
@@ -119,7 +119,7 @@ def yolo_drx(images, clnum):
   print_activations(pool4)
   # conv5
   with tf.name_scope('conv5') as scope:
-    kernel = tf.Variable(tf.truncated_normal([3, 3, 150, 100],dtype=tf.float32,stddev=1e-1), name='weights')
+    kernel = tf.Variable(tf.truncated_normal([4, 4, 150, 100],dtype=tf.float32,stddev=1e-1), name='weights')
     conv = tf.nn.conv2d(pool4, kernel, [1, 1, 1, 1], padding='SAME')
     biases = tf.Variable(tf.constant(0.0, shape=[100], dtype=tf.float32), trainable=True, name='biases')
     conv5 = tf.nn.bias_add(conv, biases)
@@ -129,16 +129,46 @@ def yolo_drx(images, clnum):
     print_activations(conv5)
   # conv6
   with tf.name_scope('conv6') as scope:
-    kernel = tf.Variable(tf.truncated_normal([3, 3, 100, clnum],dtype=tf.float32,stddev=1e-1), name='weights')
+    kernel = tf.Variable(tf.truncated_normal([5, 5, 100, 101],dtype=tf.float32,stddev=1e-1), name='weights')
     conv = tf.nn.conv2d(conv5, kernel, [1, 1, 1, 1], padding='SAME')
-    biases = tf.Variable(tf.constant(0.0, shape=[clnum], dtype=tf.float32), trainable=True, name='biases')
+    biases = tf.Variable(tf.constant(0.0, shape=[101], dtype=tf.float32), trainable=True, name='biases')
     conv6 = tf.nn.bias_add(conv, biases)
-    conv6 = batch_norm(conv6, clnum, tf.constant(True))
+    conv6 = batch_norm(conv6, 101, tf.constant(True))
     conv6 = tf.nn.sigmoid(conv6, name=scope)
     parameters += [kernel, biases]
     print_activations(conv6)
+  # conv7
+  with tf.name_scope('conv7') as scope:
+    kernel = tf.Variable(tf.truncated_normal([5, 5, 101, 103],dtype=tf.float32,stddev=1e-1), name='weights')
+    conv = tf.nn.conv2d(conv6, kernel, [1, 1, 1, 1], padding='SAME')
+    biases = tf.Variable(tf.constant(0.0, shape=[103], dtype=tf.float32), trainable=True, name='biases')
+    conv7 = tf.nn.bias_add(conv, biases)
+    conv7 = batch_norm(conv7, 103, tf.constant(True))
+    conv7 = tf.nn.sigmoid(conv7, name=scope)
+    parameters += [kernel, biases]
+    print_activations(conv7)
+  # conv8
+  with tf.name_scope('conv8') as scope:
+    kernel = tf.Variable(tf.truncated_normal([5, 5, 103, 105],dtype=tf.float32,stddev=1e-1), name='weights')
+    conv = tf.nn.conv2d(conv7, kernel, [1, 1, 1, 1], padding='SAME')
+    biases = tf.Variable(tf.constant(0.0, shape=[105], dtype=tf.float32), trainable=True, name='biases')
+    conv8 = tf.nn.bias_add(conv, biases)
+    conv8 = batch_norm(conv8, 105, tf.constant(True))
+    conv8 = tf.nn.sigmoid(conv8, name=scope)
+    parameters += [kernel, biases]
+    print_activations(conv8)
+  # conv9
+  with tf.name_scope('conv9') as scope:
+    kernel = tf.Variable(tf.truncated_normal([5, 5, 105, clnum],dtype=tf.float32,stddev=1e-1), name='weights')
+    conv = tf.nn.conv2d(conv8, kernel, [1, 1, 1, 1], padding='SAME')
+    biases = tf.Variable(tf.constant(0.0, shape=[clnum], dtype=tf.float32), trainable=True, name='biases')
+    conv9 = tf.nn.bias_add(conv, biases)
+    conv9 = batch_norm(conv9, clnum, tf.constant(True))
+    conv9 = tf.nn.sigmoid(conv9, name=scope)
+    parameters += [kernel, biases]
+    print_activations(conv9)
 
-  return conv6, parameters
+  return conv9, parameters
 
 #num_class = 2
 #sh = [1, 13, 13, 3*(5 + num_class) ]
@@ -186,24 +216,25 @@ def get_gt_feature_map(fname):
     if dbg:
         txt = fname+" "+root[1][0].text+" "+root[1][1].text+" "
         print("File name & size : ", txt)
-    for object in root.findall('size'):
+    for size in root.findall("size"):
         #print ( "Decoding size ------->  ", float(object[1].text) )
-        xsize = float(object[0].text)
-        ysize = float(object[1].text)
+        xsize = float(size[0].text)
+        ysize = float(size[1].text)
         dx = xsize / 29
         dy = ysize / 29
-    for object in root.findall('object'):
-        #name = object.find('name').text
-        if object.tag == "bndbox":
-            xmin = float(object[0].text)
-            ymin = float(object[1].text)
-            xmax = float(object[2].text)
-            ymax = float(object[3].text)
+    for obj in root.findall("object"): #"object"
+        name = obj.find("name").text
+        if name in code: 
+            xmin = float(obj.find("bndbox").find("xmin").text)
+            ymin = float(obj.find("bndbox").find("ymin").text)
+            xmax = float(obj.find("bndbox").find("xmax").text)
+            ymax = float(obj.find("bndbox").find("ymax").text)
+            #print (" xmax  :  ", xmax, " object.tag : ", obj.tag)
             if dbg: # Encode & decode
-                print( "xmin", object[0].tag, xmin )
-                print( "ymin", object[1].tag, ymin )
-                print( "xmax", object[2].tag, xmax )
-                print( "ymax", object[3].tag, ymax )
+                print( "xmin", xmin )
+                print( "ymin", ymin )
+                print( "xmax", xmax )
+                print( "ymax", ymax )
             #x = sigmoid(xo) + cx
             #y = sigmoid(yo) + cy
             #w = pw*exp(wo) # pw, ph are anchors
@@ -216,14 +247,17 @@ def get_gt_feature_map(fname):
             Nxn = int((xmax + xmin)/2/dx)
             if dbg: print( " Cell number x : ", Nxn)
             Cxn = ((xmax + xmin)/2 % dx )/dx
-            Cxn_i= -np.log(1/Cxn-1)
+            #Cxn_i= -np.log(1/Cxn-1)
+            # new version!
+            Cxn_i = Cxn
             if dbg: print( " coeff. Cxn, Cxn_inv : ", Cxn, Cxn_i, 1/(1+np.exp(-Cxn_i))  )
             if dbg: print( " x center Cxn, centrs : ", int((xmax + xmin)/2), 1/(1 + np.exp(-Cxn_i))*dx + Nxn*dx )
 
             Nyn = int((ymax + ymin)/2/dy)
             if dbg: print( " Cell number y : ", Nyn)
             Cyn = ((ymax + ymin)/2 % dy )/dy
-            Cyn_i= -np.log(1/Cyn-1)
+            #Cyn_i= -np.log(1/Cyn-1)
+            Cyn_i = Cyn
             if dbg: print( " coeff. Cyn, Cyn_inv : ", Cyn, Cyn_i, 1/(1+np.exp(-Cyn_i)) )
             if dbg: print( " Y center Cyn, centrs : ", int((ymax + ymin)/2), 1/(1 + np.exp(-Cyn_i))*dy + Nyn*dy )
 
@@ -244,13 +278,13 @@ def get_gt_feature_map(fname):
             # [obj1 = [ xo, yo, wo, ho, confid., class  ], obj2, obj3 ... ]
             if ZEROSo_c[0,Nxn,Nyn, 4 ] < 0.01:
                 ZEROSo_c[0,Nxn,Nyn, 0:5 ] = [Cxn_i, Cyn_i, w_i, h_i, 1.0]
-                ZEROSo_c[0,Nxn,Nyn, 5:7 ] = code[str(object[0].text)]
+                ZEROSo_c[0,Nxn,Nyn, 5:7 ] = code[name] #code[str(object[0].text)]
             elif ZEROSo_c[0,Nxn,Nyn, 4+7 ] < 0.01:
                 ZEROSo_c[0,Nxn,Nyn, 7:12 ] = [Cxn_i, Cyn_i, w_i, h_i, 1.0]
-                ZEROSo_c[0,Nxn,Nyn, 12:14 ] = code[str(object[0].text)]
+                ZEROSo_c[0,Nxn,Nyn, 12:14 ] = code[name] #code[str(object[0].text)]
             else:
                 ZEROSo_c[0,Nxn,Nyn, 14:19 ] = [Cxn_i, Cyn_i, w_i, h_i, 1.0]
-                ZEROSo_c[0,Nxn,Nyn, 19:21 ] = code[str(object[0].text)]
+                ZEROSo_c[0,Nxn,Nyn, 19:21 ] = code[name] #code[str(object[0].text)]
     return ZEROSo_c
 
 
@@ -282,13 +316,16 @@ def interpret_featuremap(fm):
                 object_cnt = object_cnt + 1
                 dx = 1000 / 29 #np.floor(1000 / 29)
                 dy = 1000 / 29 #np.floor(1000 / 29)
-                x = 1/(1 + np.exp(-fm[0,n1,n2,0]))*dx + n1*dx   # xo ==> x = sigmoid(xo) + cx
-                y = 1/(1 + np.exp(-fm[0,n1,n2,1]))*dy + n2*dy   # yo ==> y = sigmoid(yo) + cy
+                #x = 1/(1 + np.exp(-fm[0,n1,n2,0]))*dx + n1*dx   # xo ==> x = sigmoid(xo) + cx
+                #y = 1/(1 + np.exp(-fm[0,n1,n2,1]))*dy + n2*dy   # yo ==> y = sigmoid(yo) + cy
+                x = fm[0,n1,n2,0]*dx + n1*dx   # version 2 
+                y = fm[0,n1,n2,1]*dy + n2*dy   # version 2
+
                 #w = pw*np.exp(fm[0,n1,n2,2]) # #w = pw*exp(wo)
-                # new version
+                # new version 2
                 w = pw*fm[0,n1,n2,2]
                 #h = pw*np.exp(fm[0,n1,n2,3])
-                # new version 
+                # new version 2
                 h = pw*fm[0,n1,n2,3]
                 cl = fm[0,n1,n2,5:7]
                 obj.append([x, y, w, h, cnfid, cl])
@@ -312,6 +349,18 @@ train = optimizer.minimize( loss )
 #print ("Save/Restore the trained model !!!")
 saver = tf.train.Saver() 
 
+
+# training set for rapid trainig (keep all training data in RAM)
+training_images = []
+feature_maps = []
+for rn in range(len(annotations)):
+    im = Image.open(path +"/"+ annotations[rn][0:-4]+".jpg" ) # get associated image
+    im = np.array( im.resize((1000, 1000), PIL.Image.ANTIALIAS) )
+    im  = (im - im.min()) / (im.max() - im.min()) - 0.5
+    training_images.append(im)
+    ZEROSo_c = get_gt_feature_map(annotations[rn]) # Get groung true feature map
+    feature_maps.append(ZEROSo_c)
+
 # TRAIN!!!
 if 1:
     with tf.Session(config=tf.ConfigProto(gpu_options=gpu_options)) as sess:
@@ -322,11 +371,15 @@ if 1:
             saver.restore(sess, modelname)
         for step in range(1000000):
             # gather data
-            rn = int(np.random.random_sample(1)*len(annotations))
-            ZEROSo_c = get_gt_feature_map(annotations[rn]) # Get groung true feature map
-            im = Image.open(path +"/"+ annotations[rn][0:-4]+".jpg" ) # get associated image
-            im = np.array( im.resize((1000, 1000), PIL.Image.ANTIALIAS) )
-            im  = (im - im.min()) / (im.max() - im.min()) - 0.5
+            rn = int(np.random.uniform(0,1)*len(annotations))
+            if 1: # 1 rapid training is on
+                im = training_images[rn]
+                ZEROSo_c = feature_maps[rn]
+            else:
+                ZEROSo_c = get_gt_feature_map(annotations[rn]) # Get groung true feature map
+                im = Image.open(path +"/"+ annotations[rn][0:-4]+".jpg" ) # get associated image
+                im = np.array( im.resize((1000, 1000), PIL.Image.ANTIALIAS) )
+                im  = (im - im.min()) / (im.max() - im.min()) - 0.5
             # train
             __train, __loss = sess.run([train, loss ], feed_dict={mimages: [im], ytrue: ZEROSo_c})
             # report 
@@ -338,15 +391,15 @@ if 1:
                 object_cnt, obj = interpret_featuremap(featuremap)
                 gt_object_cnt, gt_obj = interpret_featuremap(ZEROSo_c)
                 print ("Detected object_cnt : ", object_cnt, " Ground truth obj_cnt : ", gt_object_cnt)
-                print ("Detected objects : ", obj)
-                print ("Ground truth objects : ", gt_obj)
+                #print ("Detected objects : ", obj)
+                #print ("Ground truth objects : ", gt_obj)
                 #cv2.namedWindow('frame',cv2.WINDOW_NORMAL)
                 #cv2.resizeWindow("frame", 1000, 1000) 
                 image = (im + 0.5)*255
                 result = Image.fromarray((image).astype(np.uint8))
                 for nkk in range(len(obj)): 
-                    if object_cnt > 0:
-                        print("Detected label: ",code_i[np.argmax(obj[nkk][5])]," Ground truth label: ",code_i[np.argmax(gt_obj[nkk][5])])
+                    #if object_cnt > 0:
+                    #    print("Detected label: ",code_i[np.argmax(obj[nkk][5])]," Ground truth label: ",code_i[np.argmax(gt_obj[nkk][5])])
                     #print ("arguments : ", obj[nkk]) #[obj[nkk,0]-obj[nkk,2]/2,obj[nkk,1]-obj[nkk,3]/2])
                     xmin = int(obj[nkk][0]-obj[nkk][2]/2)
                     #print ("xmin : ", xmin ) #obj[nkk,0]-obj[nkk,2]/2) 
@@ -362,7 +415,7 @@ if 1:
                     #result = Image.fromarray((image).astype(np.uint8))
                     draw = ImageDraw.Draw(result)
                     #draw.rectangle(((0, 00), (100, 100)), fill="red")
-                    draw.line([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin),(xmin, ymin)], fill=None, width=3)
+                    draw.line([(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin),(xmin, ymin)], fill="blue", width=3)
                 result.save('out.jpg')
                 #cv2.imshow('frame',image)
                 #cv2.waitKey()
@@ -384,7 +437,6 @@ if 1:
 
 
 print ("The End!")
-
 
 
 
