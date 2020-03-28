@@ -5,23 +5,22 @@ import numpy as np
 from os import listdir
 from os.path import isfile, join
 import xml.etree.ElementTree as ET
-import PIL # pip install Pillow
-from PIL import Image
+import PIL # pip install pillow
+from PIL import Image, ImageDraw
 #import cv2 # displaying
 
-
 lr = 0.001 #0.0001 # learning rate
-restore_at_begining = 1 # restore ANN model at begining of training
+restore_at_begining = 0 # restore ANN model at begining of training
 gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
 clnum = 3*(5 + 2)
 modelname = "checkpoint/model_bup.ckpt"
-pw = 7 # box max size
-ph = 7
+#pw = 7 # box max size
+#ph = 7
 dbg = 0 # display DEBUG info!
 ktiram = 1 # keep training data in RAM 
 
 
-if 0:
+if 0: # choose training data folder
     path  = "./sm_images" # small image dataset
     #path  = "./t_images"
     path_an="./sm_annotations"
@@ -33,7 +32,6 @@ else:
     path_an="./voc_annot"
     code = {"car":[1., 0.], "chair":[0., 1.] }
     code_i = ["car", "chair" ]
-
 
 
 def batch_norm(x, n_out, phase_train, scope='bn'):
@@ -175,7 +173,7 @@ def yolo_drx(images, clnum):
 #num_class = 2
 #sh = [1, 13, 13, 3*(5 + num_class) ]
 ZEROSo = np.zeros([1, 29, 29, 21])
-yt = np.random.random_sample([1, 29, 29, 21])
+#yt = np.random.random_sample([1, 29, 29, 21])
 print("yt shape : ", ZEROSo.shape)
 ytrue = tf.placeholder(tf.float32, [1, 29, 29, 21])
 
@@ -185,18 +183,20 @@ imtmp = np.random.random_sample([1,1000,1000,3])
 print("clnum : ", clnum)
 pred, parameters = yolo_drx(mimages,clnum)
 
+# Coding and decoding feature map!!!
 #x = sigmoid(xo) + cx
 #y = sigmoid(yo) + cy
-#w = pw*exp(wo) # pw, ph are anchors
+#w = pw*exp(wo) 
 #h = ph*exp(ho)
 # Inverse
 # xo= log(1/(x - cx)-1)  # sigmoid() [0,1] = 1.0 ./ ( 1.0 + exp(-z));[-inf; inf]
 #y = sigmoid(yo) + cy
 #w = pw*exp(wo) # 1 = log(exp(1))
 #h = ph*exp(ho)
-  
+# feature map coding [obj1 = [ xo, yo, wo, ho, confid., class  ], obj2, obj3 ... ]
+# feature_map shape (1, 29, 29, 21)
+
 # GET DATA 
-# [obj1 = [ xo, yo, wo, ho, confid., class  ], obj2, obj3 ... ]
 # get list of images 
 allfiles = [f for f in listdir(path) if isfile(join(path, f))]
 for iname in allfiles: 
@@ -211,10 +211,6 @@ def get_gt_feature_map(fname):
     #print ("ZEROSo_c  :  ", ZEROSo_c.shape)
     tree=ET.parse( path_an+"/"+fname)
     root=tree.getroot()
-    #xsize = float(root[1][0].text)
-    #dx = xsize / 29
-    #ysize = float(root[1][1].text)
-    #dy = ysize / 29
     if dbg:
         txt = fname+" "+root[1][0].text+" "+root[1][1].text+" "
         print("File name & size : ", txt)
@@ -222,8 +218,8 @@ def get_gt_feature_map(fname):
         #print ( "Decoding size ------->  ", float(object[1].text) )
         xsize = float(size[0].text)
         ysize = float(size[1].text)
-        dx = xsize / 29
-        dy = ysize / 29
+        dx = xsize/29
+        dy = ysize/29
     for obj in root.findall("object"): #"object"
         name = obj.find("name").text
         if name in code: 
@@ -232,29 +228,19 @@ def get_gt_feature_map(fname):
             xmax = float(obj.find("bndbox").find("xmax").text)
             ymax = float(obj.find("bndbox").find("ymax").text)
             #print (" xmax  :  ", xmax, " object.tag : ", obj.tag)
-            if dbg: # Encode & decode
+            if dbg: 
                 print( "xmin", xmin )
                 print( "ymin", ymin )
                 print( "xmax", xmax )
                 print( "ymax", ymax )
-            #x = sigmoid(xo) + cx
-            #y = sigmoid(yo) + cy
-            #w = pw*exp(wo) # pw, ph are anchors
-            #h = ph*exp(ho)
-            # Inverse
-            # xo= -log(1/(x - cx)-1)  # sigmoid() [0,1] = 1.0 ./ ( 1.0 + exp(-z));[-inf; inf]
-            #y = sigmoid(yo) + cy
-            #w = pw*exp(wo) # 1 = log(exp(1))
-            #h = ph*exp(ho)
+            # Encode & decode (lots of versions)
             Nxn = int((xmax + xmin)/2/dx)
             if dbg: print( " Cell number x : ", Nxn)
             Cxn = ((xmax + xmin)/2 % dx )/dx
             #Cxn_i= -np.log(1/Cxn-1)
-            # new version!
             Cxn_i = Cxn
             if dbg: print( " coeff. Cxn, Cxn_inv : ", Cxn, Cxn_i, 1/(1+np.exp(-Cxn_i))  )
             if dbg: print( " x center Cxn, centrs : ", int((xmax + xmin)/2), 1/(1 + np.exp(-Cxn_i))*dx + Nxn*dx )
-
             Nyn = int((ymax + ymin)/2/dy)
             if dbg: print( " Cell number y : ", Nyn)
             Cyn = ((ymax + ymin)/2 % dy )/dy
@@ -262,17 +248,21 @@ def get_gt_feature_map(fname):
             Cyn_i = Cyn
             if dbg: print( " coeff. Cyn, Cyn_inv : ", Cyn, Cyn_i, 1/(1+np.exp(-Cyn_i)) )
             if dbg: print( " Y center Cyn, centrs : ", int((ymax + ymin)/2), 1/(1 + np.exp(-Cyn_i))*dy + Nyn*dy )
-
             #h = ph*exp(ho)
             #w = pw*exp(wo)
             W = xmax - xmin
             #w_i = np.log(W/pw) # w_i = W/pw
-            # new version: W = pw*wo # sigm [0,1]
-            w_i = np.log(W/dx)/pw
+            # W = pw*wo # sigm [0,1]
+            #w_i = np.log(W/dx)/pw
+            #w_i = W/dx/pw
+            #w_i = W/xsize
+            w_i = (np.log(W*2/xsize)+3)/4
             H = ymax - ymin
             #h_i = np.log(H/ph) # h_i = H/ph 
-            # new version
-            h_i = np.log(H/dy)/ph
+            #h_i = np.log(H/dy)/ph
+            #h_i = H/dy/ph
+            #h_i = H/ysize
+            h_i = (np.log(H*2/ysize)+3)/4
             if dbg: 
                 print( " coeff. W, W_inv : ", W, w_i, pw*np.exp(w_i))
                 print( " coeff. H, H_inv : ", H, h_i, ph*np.exp(h_i))
@@ -291,22 +281,16 @@ def get_gt_feature_map(fname):
 
 
 # do tests on data gathering 
-rn = int(np.random.random_sample(1)*len(annotations))
-ZEROSo_c = get_gt_feature_map(annotations[rn]) # Get groung true feature map
-im = Image.open(path +"/"+ annotations[rn][0:-4]+".jpg" ) # get associated image
-im = np.array( im.resize((1000, 1000), PIL.Image.ANTIALIAS) )
-im  = (im - im.min()) / (im.max() - im.min()) - 0.5
+if 0:
+    rn = int(np.random.random_sample(1)*len(annotations))
+    ZEROSo_c = get_gt_feature_map(annotations[rn]) # Get groung true feature map
+    im = Image.open(path +"/"+ annotations[rn][0:-4]+".jpg" ) # get associated image
+    im = np.array( im.resize((1000, 1000), PIL.Image.ANTIALIAS) )
+    im  = (im - im.min()) / (im.max() - im.min()) - 0.5
+    #result = Image.fromarray((imtmp * 255).astype(numpy.uint8))
+    #result.save('out2.jpg')
+    #result.show()
 
-#result = Image.fromarray((imtmp * 255).astype(numpy.uint8))
-#result.save('out2.jpg')
-#result.show()
-
-# [obj1 = [ xo, yo, wo, ho, confid., class  ], obj2, obj3 ... ]
-# feature_map (1, 29, 29, 21)
-#x = sigmoid(xo) + cx
-#y = sigmoid(yo) + cy
-#w = pw*exp(wo) # pw, ph are anchors
-#h = ph*exp(ho)
 def interpret_featuremap(fm):
     object_cnt = 0
     obj = []
@@ -316,19 +300,24 @@ def interpret_featuremap(fm):
                 cnfid = fm[0,n1,n2,4] # confidence
                 #print("Object detected with confidence : ", cnfid )
                 object_cnt = object_cnt + 1
-                dx = 1000 / 29 #np.floor(1000 / 29)
-                dy = 1000 / 29 #np.floor(1000 / 29)
+                dx = 1000/29 
+                dy = 1000/29 
                 #x = 1/(1 + np.exp(-fm[0,n1,n2,0]))*dx + n1*dx   # xo ==> x = sigmoid(xo) + cx
                 #y = 1/(1 + np.exp(-fm[0,n1,n2,1]))*dy + n2*dy   # yo ==> y = sigmoid(yo) + cy
-                x = fm[0,n1,n2,0]*dx + n1*dx   # version 2 
-                y = fm[0,n1,n2,1]*dy + n2*dy   # version 2
-
-                #w = pw*np.exp(fm[0,n1,n2,2]) # #w = pw*exp(wo) # w = pw*fm[0,n1,n2,2]
-                # new version 2
-                w = np.exp(fm[0,n1,n2,2]*pw)*dx
-                #h = pw*np.exp(fm[0,n1,n2,3]) # h = pw*fm[0,n1,n2,3]
-                # new version 2
-                h = np.exp(fm[0,n1,n2,3]*ph)*dy
+                x = fm[0,n1,n2,0]*dx + n1*dx  
+                y = fm[0,n1,n2,1]*dy + n2*dy
+                #w = pw*np.exp(fm[0,n1,n2,2]) # #w = pw*exp(wo)
+                #w = pw*fm[0,n1,n2,2]
+                #w = np.exp(fm[0,n1,n2,2]*pw)*dx
+                #w = fm[0,n1,n2,2]*pw*dx
+                #w = fm[0,n1,n2,2]*1000
+                w = np.exp(fm[0,n1,n2,2]*4-3)*1000/2 # inv. (np.log(W*2/1000)+3)/4
+                #h = pw*np.exp(fm[0,n1,n2,3])
+                #h = pw*fm[0,n1,n2,3]
+                #h = np.exp(fm[0,n1,n2,3]*ph)*dy
+                #h = fm[0,n1,n2,3]*ph*dy
+                #h = fm[0,n1,n2,3]*1000
+                h = np.exp(fm[0,n1,n2,3]*4-3)*1000/2
                 cl = fm[0,n1,n2,5:7]
                 obj.append([x, y, w, h, cnfid, cl])
             if fm[0,n1,n2,4+7]>0.1:
@@ -343,8 +332,6 @@ optimizer = tf.train.GradientDescentOptimizer( lr )
 print_activations(ytrue)
 print_activations(pred)
 loss = tf.reduce_sum((ytrue-pred)*(ytrue-pred))
-# [obj1 = [ xo, yo, wo, ho, confid., class  ], obj2, obj3 ... ]
-# feature_map (1, 29, 29, 21)
 #loss_v2 = tf.reduce_sum((ytrue[:,:,:,0:2]-pred[:,:,:,0:2])*(ytrue[:,:,:,0:2]-pred[:,:,:,0:2])) + tf.reduce_sum((tf.sqrt(ytrue[:,:,:,2:4])-tf.sqrt(pred[:,:,:,2:4]))*(tf.sqrt(ytrue[:,:,:,2:4])-tf.sqrt(pred[:,:,:,2:4]))) + tf.reduce_sum((ytrue[:,:,:,4:]-pred[:,:,:,4:])*(ytrue[:,:,:,4:]-pred[:,:,:,4:]))
 
 train = optimizer.minimize( loss )
@@ -394,8 +381,9 @@ if 1:
                 object_cnt, obj = interpret_featuremap(featuremap)
                 gt_object_cnt, gt_obj = interpret_featuremap(ZEROSo_c)
                 print ("Detected object_cnt : ", object_cnt, " Ground truth obj_cnt : ", gt_object_cnt)
-                print ("Detected objects : ", obj)
-                print ("Ground truth objects : ", gt_obj)
+                if 0:
+                    print ("Detected objects : ", obj)
+                    print ("Ground truth objects : ", gt_obj)
                 #cv2.namedWindow('frame',cv2.WINDOW_NORMAL)
                 #cv2.resizeWindow("frame", 1000, 1000) 
                 image = (im + 0.5)*255
@@ -414,7 +402,6 @@ if 1:
                     #print ("ymax : ", ymax)
                     #cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0,0,255), 3)
                     #cv2.imwrite("out.jpg", image)
-                    from PIL import ImageDraw
                     #result = Image.fromarray((image).astype(np.uint8))
                     draw = ImageDraw.Draw(result)
                     #draw.rectangle(((0, 00), (100, 100)), fill="red")
@@ -422,7 +409,7 @@ if 1:
                 result.save('out.jpg')
                 #cv2.imshow('frame',image)
                 #cv2.waitKey()
-                print ("np.sum(featuremap) : ", np.sum(featuremap))
+                #print ("np.sum(featuremap) : ", np.sum(featuremap))
                 #print (" row of confidence : ", featuremap[0,11,:,4] )
                 #ZEROSo_c[0,Nxn,Nyn, 0:5 ]
                 #[Cxn_i, Cyn_i, w_i, h_i, 1.0]
@@ -440,7 +427,6 @@ if 1:
 
 
 print ("The End!")
-
 
 
 
