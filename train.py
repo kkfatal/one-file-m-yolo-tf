@@ -7,17 +7,19 @@ from os.path import isfile, join
 import xml.etree.ElementTree as ET
 import PIL # pip install Pillow
 from PIL import Image
-#import cv2 # just for displaying
+#import cv2 # displaying
 
 
-lr = 0.01 #0.0001 # learning rate
+lr = 0.001 #0.0001 # learning rate
 restore_at_begining = 1 # restore ANN model at begining of training
 gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.9)
 clnum = 3*(5 + 2)
 modelname = "checkpoint/model_bup.ckpt"
-pw = 500 # box max size
-ph = 500
+pw = 7 # box max size
+ph = 7
 dbg = 0 # display DEBUG info!
+ktiram = 1 # keep training data in RAM 
+
 
 if 0:
     path  = "./sm_images" # small image dataset
@@ -264,13 +266,13 @@ def get_gt_feature_map(fname):
             #h = ph*exp(ho)
             #w = pw*exp(wo)
             W = xmax - xmin
-            #w_i = np.log(W/pw)
+            #w_i = np.log(W/pw) # w_i = W/pw
             # new version: W = pw*wo # sigm [0,1]
-            w_i = W/pw
+            w_i = np.log(W/dx)/pw
             H = ymax - ymin
-            #h_i = np.log(H/ph)
+            #h_i = np.log(H/ph) # h_i = H/ph 
             # new version
-            h_i = H/ph
+            h_i = np.log(H/dy)/ph
             if dbg: 
                 print( " coeff. W, W_inv : ", W, w_i, pw*np.exp(w_i))
                 print( " coeff. H, H_inv : ", H, h_i, ph*np.exp(h_i))
@@ -321,12 +323,12 @@ def interpret_featuremap(fm):
                 x = fm[0,n1,n2,0]*dx + n1*dx   # version 2 
                 y = fm[0,n1,n2,1]*dy + n2*dy   # version 2
 
-                #w = pw*np.exp(fm[0,n1,n2,2]) # #w = pw*exp(wo)
+                #w = pw*np.exp(fm[0,n1,n2,2]) # #w = pw*exp(wo) # w = pw*fm[0,n1,n2,2]
                 # new version 2
-                w = pw*fm[0,n1,n2,2]
-                #h = pw*np.exp(fm[0,n1,n2,3])
+                w = np.exp(fm[0,n1,n2,2]*pw)*dx
+                #h = pw*np.exp(fm[0,n1,n2,3]) # h = pw*fm[0,n1,n2,3]
                 # new version 2
-                h = pw*fm[0,n1,n2,3]
+                h = np.exp(fm[0,n1,n2,3]*ph)*dy
                 cl = fm[0,n1,n2,5:7]
                 obj.append([x, y, w, h, cnfid, cl])
             if fm[0,n1,n2,4+7]>0.1:
@@ -351,15 +353,16 @@ saver = tf.train.Saver()
 
 
 # training set for rapid trainig (keep all training data in RAM)
-training_images = []
-feature_maps = []
-for rn in range(len(annotations)):
-    im = Image.open(path +"/"+ annotations[rn][0:-4]+".jpg" ) # get associated image
-    im = np.array( im.resize((1000, 1000), PIL.Image.ANTIALIAS) )
-    im  = (im - im.min()) / (im.max() - im.min()) - 0.5
-    training_images.append(im)
-    ZEROSo_c = get_gt_feature_map(annotations[rn]) # Get groung true feature map
-    feature_maps.append(ZEROSo_c)
+if ktiram:
+    training_images = []
+    feature_maps = []
+    for rn in range(len(annotations)):
+        im = Image.open(path +"/"+ annotations[rn][0:-4]+".jpg" ) # get associated image
+        im = np.array( im.resize((1000, 1000), PIL.Image.ANTIALIAS) )
+        im  = (im - im.min()) / (im.max() - im.min()) - 0.5
+        training_images.append(im)
+        ZEROSo_c = get_gt_feature_map(annotations[rn]) # Get groung true feature map
+        feature_maps.append(ZEROSo_c)
 
 # TRAIN!!!
 if 1:
@@ -372,7 +375,7 @@ if 1:
         for step in range(1000000):
             # gather data
             rn = int(np.random.uniform(0,1)*len(annotations))
-            if 1: # 1 rapid training is on
+            if ktiram: # 1 rapid training is on
                 im = training_images[rn]
                 ZEROSo_c = feature_maps[rn]
             else:
@@ -391,8 +394,8 @@ if 1:
                 object_cnt, obj = interpret_featuremap(featuremap)
                 gt_object_cnt, gt_obj = interpret_featuremap(ZEROSo_c)
                 print ("Detected object_cnt : ", object_cnt, " Ground truth obj_cnt : ", gt_object_cnt)
-                #print ("Detected objects : ", obj)
-                #print ("Ground truth objects : ", gt_obj)
+                print ("Detected objects : ", obj)
+                print ("Ground truth objects : ", gt_obj)
                 #cv2.namedWindow('frame',cv2.WINDOW_NORMAL)
                 #cv2.resizeWindow("frame", 1000, 1000) 
                 image = (im + 0.5)*255
